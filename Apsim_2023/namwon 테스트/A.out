@@ -1,0 +1,5 @@
+ApsimVersion = 7.10 r4218
+Title = A
+           Date        biomass          yield  grain_protein     grain_size            esw
+   (dd/mm/yyyy)        (kg/ha)        (kg/ha)            (%)            (g)           (mm)
+     13/06/2022        10580.0         4032.3         13.129          0.030        278.783
