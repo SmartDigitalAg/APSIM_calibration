@@ -1,7 +1,0 @@
-ApsimVersion = 7.10 r4218
-Title = Mokpo_weather
-           Date        biomass          yield  grain_protein     grain_size            esw
-   (dd/mm/yyyy)        (kg/ha)        (kg/ha)            (%)            (g)           (mm)
-     06/06/2008        13740.5         5171.3         11.224          0.034        572.721
-     04/06/2009        11536.3         3881.8         10.221          0.030        553.162
-     13/06/2010         8308.1         3200.7         10.982          0.034        568.898

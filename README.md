@@ -6,5 +6,3 @@ APSIM 밀(전국) 생산량 추정
 
 ### 2. 기상자료
 1. [preprocess/preprocess_weather.py](preprocess/preprocess_weather.py)
-
-### 3. APSIM(모델)
