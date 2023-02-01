@@ -13,7 +13,7 @@ import xlsxwriter as xlsxwriter
 from openpyxl import load_workbook
 
 
-def load_data(stn_Ids, stn_Nm, output_dir_txt, output_dir_xlsx, site_info, latitude, longitude):
+def load_data(stn_Ids, stn_Nm, output_dir_txt, output_dir_xlsx, site_info, latitude, longitude, altitude):
     cache_dir = "../output/cache_weather"
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
@@ -80,7 +80,7 @@ def load_data(stn_Ids, stn_Nm, output_dir_txt, output_dir_xlsx, site_info, latit
 
     '''일사량 & 증발산량 null 처리'''
     lati = latitude # 북위
-    alti = 200 # 해발고도
+    alti = altitude # 해발고도
     height = 10
 
     u_2 = df['wind'] * 4.87 / np.log(67.8 * height - 5.42)
@@ -120,7 +120,10 @@ def load_data(stn_Ids, stn_Nm, output_dir_txt, output_dir_xlsx, site_info, latit
     ET = ((0.408) * (delta) * (R_ns - R_nl - G) + (gamma) * (900 / (df['tavg'] + 273)) * u_2 * (e)) / (
             delta + gamma * (1 + 0.34 * u_2))
 
-    df['radn'] = df['radn'].fillna(round(R_ns, 3))
+    # Rn
+    df['radn'] = df['radn'].fillna(round(R_ns - R_nl, 3))
+    # R_ns
+    # df['radn'] = df['radn'].fillna(round(R_ns, 3))
     df['evap'] = df['evap'].fillna(round(ET, 3))
     #### end 일사량 & 증발산량  null 처리 ####
 
@@ -218,7 +221,8 @@ def main():
             stn_Nm = f[i]
             latitude = a['위도'].values[0].item()
             longitude = a['경도'].values[0].item()
-            filename = load_data(stn_Ids, stn_Nm, output_dir_txt, output_dir_xlsx,site_info, latitude, longitude)
+            altitude = a['고도'].values[0].item()
+            filename = load_data(stn_Ids, stn_Nm, output_dir_txt, output_dir_xlsx,site_info, latitude, longitude, altitude)
             wheat = pd.read_csv(f"../output/kosis/{filenames_wheat[i]}.csv")
             wheat.to_csv(os.path.join(output_dir_wheat, f"{filename}_weather.csv"), index=False, encoding="utf-8-sig")
 
