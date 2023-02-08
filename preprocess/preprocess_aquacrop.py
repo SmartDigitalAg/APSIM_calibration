@@ -1,4 +1,3 @@
-import shutil
 from datetime import datetime
 import json
 import time
@@ -9,13 +8,14 @@ import requests
 import tqdm
 import numpy as np
 import math
+import shutil
 import csv
 import xlsxwriter as xlsxwriter
 from openpyxl import load_workbook
 
 
-def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitude, altitude):
-    cache_dir = "../output/cache_weather"
+def load_data(stn_Ids, stn_Nm, output_dir_aqua, site_info, latitude, altitude):
+    cache_dir = "../output/cache_weather_date"
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
 
@@ -48,12 +48,7 @@ def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitud
 
             js = json.loads(result.content)
             weather = pd.DataFrame(js['response']['body']['items']['item'])
-            weather['year'] = pd.to_datetime(weather['tm']).dt.year
-            weather['month'] = pd.to_datetime(weather['tm']).dt.month
-            weather['day'] = pd.to_datetime(weather['tm']).dt.day
 
-            weather['date'] = pd.to_datetime(weather[['year', 'month', 'day']])
-            weather['day'] = weather['date'].dt.strftime('%j')
 
             '''
             sumRn: 일강수량, sumGsr: 합계 일사량, sumSmlEv: 합계 소형증발량, avgTa: 평균기온, minTa: 최저기온, maxTa: 최고기온
@@ -62,58 +57,70 @@ def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitud
             평균기온, 평균습도, 일조시간, 북위, 해발고도, 풍속계 높이(10) | 일사량, 최고기온, 최저기온, 강수량, 증발산량
             '''
 
+            # MinTemp, MaxTemp, Precipitation, ReferenceET, Date
 
             # li = ['year', 'day', 'sumGsr', 'maxTa', 'minTa', 'sumRn', 'sumSmlEv', 'avgTa', 'avgRhm', 'avgWs', 'avgTca', 'month']
-            li = ['year', 'month', 'day', 'sumGsr', 'maxTa', 'minTa', 'sumRn', 'sumSmlEv',
+            # li = ['minTa', 'maxTa', 'sumRn', 'sumSmlEv','tm',
+            #       'avgTa', 'avgRhm', 'avgWs', 'sumSsHr']
+
+            weather['year'] = pd.to_datetime(weather['tm']).dt.year
+            weather['month'] = pd.to_datetime(weather['tm']).dt.month
+            weather['day'] = pd.to_datetime(weather['tm']).dt.day
+
+            weather['d'] = pd.to_datetime(weather[['year', 'month', 'day']])
+            weather['doy'] = weather['d'].dt.strftime('%j')
+
+            li = ['year', 'month', 'day', 'doy', 'sumGsr', 'maxTa', 'minTa', 'sumRn', 'sumSmlEv',
                   'avgTa', 'avgRhm', 'avgWs', 'sumSsHr']
             weather = weather.loc[:, li]
             weather = weather.apply(pd.to_numeric)
             weather.to_csv(cache_filename, index=False)
+
         else:
             weather = pd.read_csv(cache_filename)
 
         list_dfs.append(weather)
 
     df = pd.concat(list_dfs)
-    df.columns = ['year', 'month', 'day', 'radn', 'maxt', 'mint', 'rain', 'evap',
-              'tavg', 'humid', 'wind', 'sumradn']
-    df['rain'] = df['rain'].fillna(0)
+    df.columns = ['Year', 'Month', 'Day', 'doy', 'Solar rad', 'Tmax(C)', 'Tmin(C)', 'Prcp(mm)', 'Et0(mm)',
+                  'tavg', 'RHmean', 'Wind at 10m', 'sumradn']
+    df['Prcp(mm)'] = df['Prcp(mm)'].fillna(0)
 
     '''일사량 & 증발산량 null 처리'''
-    lati = latitude # 북위
-    alti = altitude # 해발고도
+    lati = latitude  # 북위
+    alti = altitude  # 해발고도
     height = 10
 
-    u_2 = df['wind'] * 4.87 / np.log(67.8 * height - 5.42)
+    u_2 = df['Wind at 10m'] * 4.87 / np.log(67.8 * height - 5.42)
     P = 101.3 * ((293 - 0.0065 * alti) / 293) ** 5.26
     delta = df['tavg'].apply(lambda x: 4098 * (0.6108 * np.exp((17.27 * x) / (x + 237.3))) / (x + 237.3) ** 2)
     gamma = 0.665 * 10 ** (-3) * P
-    u_2_cal = 1 + 0.34 * u_2 # P
-    Q = delta / (delta + gamma * u_2_cal) # Q
-    R = gamma / (delta + gamma * u_2_cal) # R
-    S = 900 / (df['tavg'] + 273) * u_2 # S
+    u_2_cal = 1 + 0.34 * u_2  # P
+    Q = delta / (delta + gamma * u_2_cal)  # Q
+    R = gamma / (delta + gamma * u_2_cal)  # R
+    S = 900 / (df['tavg'] + 273) * u_2  # S
     e_s = df['tavg'].apply(lambda x: 0.6108 * np.exp((17.27 * x) / (x + 237.3)))
-    e_a = df['humid'] / 100 * e_s
-    e = e_s - e_a # e_s-e_a
-    doi = df['day'] # day of year
+    e_a = df['RHmean'] / 100 * e_s
+    e = e_s - e_a  # e_s-e_a
+    doi = df['doy']  # day of year
     dr = doi.apply(lambda x: 1 + 0.033 * np.cos(2 * 3.141592 / 365 * x))
     small_delta = doi.apply(lambda x: 0.409 * np.sin(2 * 3.141592 / 365 * x - 1.39))
     theta = lati * math.pi / 180
     w_s = np.arccos(-np.tan(theta) * small_delta.apply(lambda x: np.tan(x)))
 
     Ra = 24 * 60 / math.pi * 0.082 * dr * \
-               (w_s * small_delta.apply(lambda x: math.sin(x)) *
-                np.sin(theta) +
-                np.cos(theta) *
-                small_delta.apply(lambda x: math.cos(x)) *
-                w_s.apply(lambda x: math.sin(x)))
+         (w_s * small_delta.apply(lambda x: math.sin(x)) *
+          np.sin(theta) +
+          np.cos(theta) *
+          small_delta.apply(lambda x: math.cos(x)) *
+          w_s.apply(lambda x: math.sin(x)))
     N = 24 / math.pi * w_s
     Rs = (0.25 + 0.5 * df['sumradn'] / N) * Ra
     Rso = (0.75 + 2 * 10 ** (-5) * alti) * Ra
-    Rs_Rso = Rs / Rso # Rs/Rso
+    Rs_Rso = Rs / Rso  # Rs/Rso
     R_ns = 0.77 * Rs
     R_nl = 4.903 * 10 ** (-9) * (df['tavg'] + 273.16) ** 4 * (0.34 - 0.14 * e_a ** (0.5)) * (
-                1.35 * Rs_Rso - 0.35)
+            1.35 * Rs_Rso - 0.35)
     # df['Rn'] = R_ns - R_nl
     G = 0
     # df['ET'] = ((0.408) * (delta) * (df['Rn'] - G) + (gamma) * (900 / (df['tavg'] + 273)) * u_2 * (e)) / (
@@ -122,56 +129,30 @@ def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitud
             delta + gamma * (1 + 0.34 * u_2))
 
     # Rn
-    df['radn'] = df['radn'].fillna(round(R_ns - R_nl, 3))
+    # df['radn'] = df['radn'].fillna(round(R_ns - R_nl, 3))
     # R_ns
-    # df['radn'] = df['radn'].fillna(round(R_ns, 3))
-    df['evap'] = df['evap'].fillna(round(ET, 3))
+    df['Solar rad'] = df['Solar rad'].fillna(round(R_ns, 3))
+    df['Et0(mm)'] = df['Et0(mm)'].fillna(round(ET, 3))
     #### end 일사량 & 증발산량  null 처리 ####
 
+    #### Wind at 10m ####
+    # u2 = uz * 4.87 * ln(67.8z - 5.42)
 
-    # xslx tav, amp
-    tav = round(df.groupby('year').mean()['tavg'].mean(), 2)
-    amp = round((df.groupby('month').max()['tavg'] - df.groupby('month').min()['tavg']).mean(), 2)
+    # df = df[df['doy'] != 366]
 
-    # 불필요한 column 제거
-    df.drop(columns = ['month', 'tavg', 'humid', 'wind', 'sumradn'], inplace=True)
 
-    df.insert(0, 'site', site_info[site_info['행정구역'] == stn_Nm]['영문 표기'].values[0])
-    new_row = pd.DataFrame([['()', '()', '()', '(MJ/m2)', '(oC)', '(oC)', '(mm)', '(mm)']],
-                           columns=df.columns)
-    df = pd.concat([df.iloc[:0], new_row, df.iloc[0:]], ignore_index = True)
+    df = df[['Day', 'Month', 'Year', 'Tmin(C)', 'Tmax(C)', 'Prcp(mm)', 'Et0(mm)', 'Wind at 10m', 'RHmean', 'Solar rad']]
+    df['RHmean'] = df['RHmean'].fillna(15)
+    df = df.fillna(0)
 
-    df = df.astype(str)
-    df = df['site'] + " " + df['year'] + " " + df['day'] + " " + df['radn'] + " " + df['maxt'] + " " + df['mint'] + " " + df['rain'] + " " + df['evap']
-    new_row2 = pd.DataFrame([['site year day radn maxt mint rain evap']])
-    df = pd.concat([df.iloc[:0], new_row2, df.iloc[0:]], ignore_index = True)
 
     filename = site_info[site_info['행정구역'] == stn_Nm]['영문 표기'].values[0]
+    # df = df[['MinTemp', 'MaxTemp', 'Precipitation', 'ReferenceET', 'Date']]
 
-    print(filename)
-
-    # model 요구에 맞춰 data 추가 & xlsx 완성
-    writer = pd.ExcelWriter(os.path.join(output_dir_weather, f"{filename}_weather.xlsx"), engine='xlsxwriter')
-    workbook = writer.book
-    worksheet = workbook.add_worksheet()
-    worksheet.write('A1', '[weather.met.weather]')
-    worksheet.write('A2', '[weather.met.weather]')
-    worksheet.write('A3', '!Title = Namwon 2007-2020')
-    worksheet.write('A4', f'latitude ={latitude}')
-    worksheet.write('A5', f'Longitude ={longitude}')
-    worksheet.write('A6', "! TAV and AMP inserted by 'tav_amp' on 31/12/2020 at 10:00 for period from   1/2007 to 366/2020 (ddd/yyyy)")
-    worksheet.write('A7', f'tav =  {tav} (oC)     ! annual average ambient temperature')
-    worksheet.write('A8', f'amp =  {amp} (oC)     ! annual amplitude in mean monthly temperature')
-    worksheet.write('A9', ' ')
-    worksheet.write('A10', ' ')
-    writer.close()
-    writer = pd.ExcelWriter(os.path.join(output_dir_weather, f"{filename}_weather.xlsx"), engine='openpyxl', mode="a", if_sheet_exists='overlay')
-    df.to_excel(writer, index=False, startrow=11, sheet_name="Sheet1", header=None)
-    writer.close()
-
-    c = pd.read_excel(os.path.join(output_dir_weather, f"{filename}_weather.xlsx"))
-
-    c.to_csv(os.path.join(output_dir_weather, f"{filename}_weather.txt"), index=False, header=None, sep=" ", quoting = csv.QUOTE_NONE, escapechar = ' ', quotechar='', errors='ignore')
+    # df.to_csv(os.path.join(output_dir_aqua, f"{filename}_weather.csv"), index=False, sep=' ')
+    # df.to_csv(os.path.join(output_dir_aqua, f"{filename}_weather.txt"), index=False, sep=' ')
+    df.to_csv(os.path.join(output_dir_aqua, f"{filename}_weather.csv"), index=False)
+    df.to_csv(os.path.join(output_dir_aqua, f"{filename}_weather.txt"), index=False)
 
     return filename
 
@@ -201,18 +182,16 @@ def moveFile(ext, item, dir_path):
             shutil.move(filePath, finalPath)
 
 
+
+
 def main():
     output_dir = "../output/kosis/"
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    output_dir_weather = "../output/weather_apsim/"
-    if not os.path.exists(output_dir_weather):
-        os.makedirs(output_dir_weather)
-    #
-    # output_dir_xlsx = "../output/weather_xlsx/"
-    # if not os.path.exists(output_dir_xlsx):
-    #     os.makedirs(output_dir_xlsx)
+    output_dir_aqua = "../output/weather_aqua/"
+    if not os.path.exists(output_dir_aqua):
+        os.makedirs(output_dir_aqua)
 
     output_dir_wheat = "../output/kosis_wheat/"
     if not os.path.exists(output_dir_wheat):
@@ -248,7 +227,7 @@ def main():
             latitude = a['위도'].values[0].item()
             longitude = a['경도'].values[0].item()
             altitude = a['고도'].values[0].item()
-            filename = load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitude, altitude)
+            filename = load_data(stn_Ids, stn_Nm, output_dir_aqua, site_info, latitude, altitude)
             wheat = pd.read_csv(f"../output/kosis/{filenames_wheat[i]}.csv")
             wheat.to_csv(os.path.join(output_dir_wheat, f"{filename}_weather.csv"), index=False, encoding="utf-8-sig")
 
@@ -256,10 +235,14 @@ def main():
             # print("KeyError: ", f[i])
     print("기상데이터 없음: ", n)
 
+
+
+
+    ###########################################################################################################################################
     # 폴더 정리
-    # C:\code\APSIM_calibration\output\weather_apsim
+    # C:\code\APSIM_calibration\output\weather_aqua
     """폴더선택"""
-    dir_path = 'C:\code\APSIM_calibration\output\weather_apsim'
+    dir_path = 'C:\code\APSIM_calibration\output\weather_aqua'
 
     """폴더내파일검사"""
 
@@ -270,10 +253,11 @@ def main():
     for item in global_cache[dir_path]:
 
         """추가할 확장자를 수동으로 리스트에 추가"""
-        extList = ["txt", "xlsx"]
+        extList = ["txt", "csv"]
 
         for i in range(0, len(extList)):
             moveFile(extList[i], item, dir_path)
+
 
 
 if __name__ == '__main__':

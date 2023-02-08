@@ -1,4 +1,3 @@
-import shutil
 from datetime import datetime
 import json
 import time
@@ -14,8 +13,8 @@ import xlsxwriter as xlsxwriter
 from openpyxl import load_workbook
 
 
-def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitude, altitude):
-    cache_dir = "../output/cache_weather"
+def load_data(stn_Ids, stn_Nm, output_dir_dssat, site_info, latitude, altitude):
+    cache_dir = "../output/cache_weather_date"
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
 
@@ -52,8 +51,8 @@ def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitud
             weather['month'] = pd.to_datetime(weather['tm']).dt.month
             weather['day'] = pd.to_datetime(weather['tm']).dt.day
 
-            weather['date'] = pd.to_datetime(weather[['year', 'month', 'day']])
-            weather['day'] = weather['date'].dt.strftime('%j')
+            weather['d'] = pd.to_datetime(weather[['year', 'month', 'day']])
+            weather['doy'] = weather['d'].dt.strftime('%j')
 
             '''
             sumRn: 일강수량, sumGsr: 합계 일사량, sumSmlEv: 합계 소형증발량, avgTa: 평균기온, minTa: 최저기온, maxTa: 최고기온
@@ -64,7 +63,7 @@ def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitud
 
 
             # li = ['year', 'day', 'sumGsr', 'maxTa', 'minTa', 'sumRn', 'sumSmlEv', 'avgTa', 'avgRhm', 'avgWs', 'avgTca', 'month']
-            li = ['year', 'month', 'day', 'sumGsr', 'maxTa', 'minTa', 'sumRn', 'sumSmlEv',
+            li = ['year', 'month', 'day', 'doy', 'sumGsr', 'maxTa', 'minTa', 'sumRn', 'sumSmlEv',
                   'avgTa', 'avgRhm', 'avgWs', 'sumSsHr']
             weather = weather.loc[:, li]
             weather = weather.apply(pd.to_numeric)
@@ -75,9 +74,10 @@ def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitud
         list_dfs.append(weather)
 
     df = pd.concat(list_dfs)
-    df.columns = ['year', 'month', 'day', 'radn', 'maxt', 'mint', 'rain', 'evap',
+    df.columns = ['year', 'month', 'day', 'doy', 'radn', 'maxt', 'mint', 'rain', 'evap',
               'tavg', 'humid', 'wind', 'sumradn']
     df['rain'] = df['rain'].fillna(0)
+
 
     '''일사량 & 증발산량 null 처리'''
     lati = latitude # 북위
@@ -95,7 +95,7 @@ def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitud
     e_s = df['tavg'].apply(lambda x: 0.6108 * np.exp((17.27 * x) / (x + 237.3)))
     e_a = df['humid'] / 100 * e_s
     e = e_s - e_a # e_s-e_a
-    doi = df['day'] # day of year
+    doi = df['doy'] # day of year
     dr = doi.apply(lambda x: 1 + 0.033 * np.cos(2 * 3.141592 / 365 * x))
     small_delta = doi.apply(lambda x: 0.409 * np.sin(2 * 3.141592 / 365 * x - 1.39))
     theta = lati * math.pi / 180
@@ -122,83 +122,27 @@ def load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitud
             delta + gamma * (1 + 0.34 * u_2))
 
     # Rn
-    df['radn'] = df['radn'].fillna(round(R_ns - R_nl, 3))
+    # df['radn'] = df['radn'].fillna(round(R_ns - R_nl, 3))
     # R_ns
-    # df['radn'] = df['radn'].fillna(round(R_ns, 3))
+    df['radn'] = df['radn'].fillna(round(R_ns, 3))
     df['evap'] = df['evap'].fillna(round(ET, 3))
     #### end 일사량 & 증발산량  null 처리 ####
 
 
-    # xslx tav, amp
-    tav = round(df.groupby('year').mean()['tavg'].mean(), 2)
-    amp = round((df.groupby('month').max()['tavg'] - df.groupby('month').min()['tavg']).mean(), 2)
+    df = df.fillna(0)
 
-    # 불필요한 column 제거
-    df.drop(columns = ['month', 'tavg', 'humid', 'wind', 'sumradn'], inplace=True)
 
-    df.insert(0, 'site', site_info[site_info['행정구역'] == stn_Nm]['영문 표기'].values[0])
-    new_row = pd.DataFrame([['()', '()', '()', '(MJ/m2)', '(oC)', '(oC)', '(mm)', '(mm)']],
-                           columns=df.columns)
-    df = pd.concat([df.iloc[:0], new_row, df.iloc[0:]], ignore_index = True)
+    df= df[['maxt', 'mint', 'wind', 'rain', 'radn', 'year', 'doy']]
 
-    df = df.astype(str)
-    df = df['site'] + " " + df['year'] + " " + df['day'] + " " + df['radn'] + " " + df['maxt'] + " " + df['mint'] + " " + df['rain'] + " " + df['evap']
-    new_row2 = pd.DataFrame([['site year day radn maxt mint rain evap']])
-    df = pd.concat([df.iloc[:0], new_row2, df.iloc[0:]], ignore_index = True)
 
     filename = site_info[site_info['행정구역'] == stn_Nm]['영문 표기'].values[0]
 
     print(filename)
 
-    # model 요구에 맞춰 data 추가 & xlsx 완성
-    writer = pd.ExcelWriter(os.path.join(output_dir_weather, f"{filename}_weather.xlsx"), engine='xlsxwriter')
-    workbook = writer.book
-    worksheet = workbook.add_worksheet()
-    worksheet.write('A1', '[weather.met.weather]')
-    worksheet.write('A2', '[weather.met.weather]')
-    worksheet.write('A3', '!Title = Namwon 2007-2020')
-    worksheet.write('A4', f'latitude ={latitude}')
-    worksheet.write('A5', f'Longitude ={longitude}')
-    worksheet.write('A6', "! TAV and AMP inserted by 'tav_amp' on 31/12/2020 at 10:00 for period from   1/2007 to 366/2020 (ddd/yyyy)")
-    worksheet.write('A7', f'tav =  {tav} (oC)     ! annual average ambient temperature')
-    worksheet.write('A8', f'amp =  {amp} (oC)     ! annual amplitude in mean monthly temperature')
-    worksheet.write('A9', ' ')
-    worksheet.write('A10', ' ')
-    writer.close()
-    writer = pd.ExcelWriter(os.path.join(output_dir_weather, f"{filename}_weather.xlsx"), engine='openpyxl', mode="a", if_sheet_exists='overlay')
-    df.to_excel(writer, index=False, startrow=11, sheet_name="Sheet1", header=None)
-    writer.close()
 
-    c = pd.read_excel(os.path.join(output_dir_weather, f"{filename}_weather.xlsx"))
-
-    c.to_csv(os.path.join(output_dir_weather, f"{filename}_weather.txt"), index=False, header=None, sep=" ", quoting = csv.QUOTE_NONE, escapechar = ' ', quotechar='', errors='ignore')
+    df.to_csv(os.path.join(output_dir_dssat, f"{filename}_weather.txt"), index=False, header=None)
 
     return filename
-
-def cached_listdir(path, global_cache):
-    res = global_cache.get(path)
-    if res is None:
-        res = os.listdir(path)
-        global_cache[path] = res
-    return res
-
-
-def moveFile(ext, item, dir_path):
-    if item.rpartition(".")[2] == ext:
-        """폴더이동"""
-        # print(ext + "확장자를 가진 " + item)
-
-        tDir = dir_path + '/' + ext
-        # print(dir_path + '/' + item)
-
-        if not os.path.isdir(tDir):
-            os.mkdir(tDir)
-
-        filePath = dir_path + '/' + item
-        finalPath = tDir + '/' + item
-
-        if os.path.isfile(filePath):
-            shutil.move(filePath, finalPath)
 
 
 def main():
@@ -206,13 +150,9 @@ def main():
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    output_dir_weather = "../output/weather_apsim/"
-    if not os.path.exists(output_dir_weather):
-        os.makedirs(output_dir_weather)
-    #
-    # output_dir_xlsx = "../output/weather_xlsx/"
-    # if not os.path.exists(output_dir_xlsx):
-    #     os.makedirs(output_dir_xlsx)
+    output_dir_dssat = "../output/weather_dssat/"
+    if not os.path.exists(output_dir_dssat):
+        os.makedirs(output_dir_dssat)
 
     output_dir_wheat = "../output/kosis_wheat/"
     if not os.path.exists(output_dir_wheat):
@@ -246,9 +186,8 @@ def main():
             stn_Ids = a['지점코드'].values[0].item()
             stn_Nm = f[i]
             latitude = a['위도'].values[0].item()
-            longitude = a['경도'].values[0].item()
             altitude = a['고도'].values[0].item()
-            filename = load_data(stn_Ids, stn_Nm, output_dir_weather, site_info, latitude, longitude, altitude)
+            filename = load_data(stn_Ids, stn_Nm, output_dir_dssat,site_info, latitude, altitude)
             wheat = pd.read_csv(f"../output/kosis/{filenames_wheat[i]}.csv")
             wheat.to_csv(os.path.join(output_dir_wheat, f"{filename}_weather.csv"), index=False, encoding="utf-8-sig")
 
@@ -256,24 +195,6 @@ def main():
             # print("KeyError: ", f[i])
     print("기상데이터 없음: ", n)
 
-    # 폴더 정리
-    # C:\code\APSIM_calibration\output\weather_apsim
-    """폴더선택"""
-    dir_path = 'C:\code\APSIM_calibration\output\weather_apsim'
-
-    """폴더내파일검사"""
-
-    global_cache = {}
-
-    cached_listdir(dir_path, global_cache)
-
-    for item in global_cache[dir_path]:
-
-        """추가할 확장자를 수동으로 리스트에 추가"""
-        extList = ["txt", "xlsx"]
-
-        for i in range(0, len(extList)):
-            moveFile(extList[i], item, dir_path)
 
 
 if __name__ == '__main__':
